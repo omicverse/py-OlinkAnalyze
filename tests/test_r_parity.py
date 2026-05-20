@@ -197,3 +197,124 @@ def test_olink_lmer_r_parity(shared_dataset):
     mask = np.isfinite(py_p) & np.isfinite(r_p)
     p_corr = float(np.corrcoef(py_p[mask], r_p[mask])[0, 1])
     assert p_corr > 0.95, f"LMM p.value Pearson r = {p_corr:.4f}"
+
+
+# ======================================================================
+# v0.2 R-parity tests — ANOVA, Kruskal-Wallis, LOD, bridge selector
+# ======================================================================
+
+@pytest.fixture(scope="module")
+def three_group_dataset(tmp_path_factory):
+    """3-group NPX (Group) for ANOVA / Kruskal; plus a bridge frame.
+
+    The R driver also needs a 2-level ``Treatment`` column for the
+    ttest/wilcox/lmer references, so we collapse group2 into group1.
+    """
+    df = generate_synthetic_npx(n_proteins=50, n_samples_per_group=8,
+                                n_groups=3, seed=0)
+    n_per = 8
+    df = df.assign(
+        Subject=[f"Subj{int(s[1:]) % n_per:02d}" for s in df["SampleID"]],
+        Group=df["Treatment"],
+    )
+    df["Treatment"] = df["Group"].map(
+        {"group0": "group0", "group1": "group1", "group2": "group1"}
+    )
+    work = tmp_path_factory.mktemp("olink_parity_v2")
+    npx_tsv = work / "npx.tsv"
+    df.to_csv(npx_tsv, sep="\t", index=False, na_rep="NA")
+
+    # Bridge frame for olink_bridgeselector parity.
+    from tests._synth import generate_bridge_pair
+    df_ref, _, _, _ = generate_bridge_pair(
+        n_proteins=30, n_samples_per_project=20, n_bridge=4, seed=13)
+    df_ref = df_ref.assign(QC_Warning="PASS")
+    df_ref.to_csv(work / "bridge_npx.tsv", sep="\t", index=False, na_rep="NA")
+
+    cmd = (
+        f"source {CONDA_BIN} && conda activate {CONDA_ENV} "
+        f"&& Rscript {R_DRIVER} {npx_tsv} {work / 'R_out'}"
+    )
+    subprocess.run(["bash", "-lc", cmd], check=True,
+                   capture_output=True, text=True)
+    return {"df": df, "df_ref": df_ref, "work": work,
+            "R_out": work / "R_out"}
+
+
+def test_olink_anova_r_parity(three_group_dataset):
+    """olink_anova F-statistic and p-value should match R closely."""
+    from pyolinkanalyze import olink_anova
+    anova_path = three_group_dataset["R_out"] / "anova.tsv"
+    if not anova_path.exists():
+        pytest.skip("R olink_anova output not present")
+    py = olink_anova(three_group_dataset["df"], variable="Group")
+    r = pd.read_csv(anova_path, sep="\t")
+    py_a, r_a = _align(py, r)
+    if len(py_a) < 5:
+        pytest.skip(f"Too few common OlinkIDs ({len(py_a)})")
+
+    f_corr = np.corrcoef(py_a["statistic"].to_numpy(),
+                         r_a["statistic"].to_numpy())[0, 1]
+    assert f_corr > 0.99, f"ANOVA F-stat Pearson r = {f_corr:.4f}"
+    p_corr = np.corrcoef(py_a["p.value"].to_numpy(),
+                         r_a["p.value"].to_numpy())[0, 1]
+    assert p_corr > 0.99, f"ANOVA p.value Pearson r = {p_corr:.4f}"
+
+
+def test_olink_one_non_parametric_r_parity(three_group_dataset):
+    """Kruskal-Wallis statistic / p should match R closely."""
+    from pyolinkanalyze import olink_one_non_parametric
+    kw_path = three_group_dataset["R_out"] / "kruskal.tsv"
+    if not kw_path.exists():
+        pytest.skip("R olink_one_non_parametric output not present")
+    py = olink_one_non_parametric(three_group_dataset["df"], variable="Group")
+    r = pd.read_csv(kw_path, sep="\t")
+    py_a, r_a = _align(py, r)
+    if len(py_a) < 5:
+        pytest.skip(f"Too few common OlinkIDs ({len(py_a)})")
+
+    stat_corr = np.corrcoef(py_a["statistic"].to_numpy(),
+                            r_a["statistic"].to_numpy())[0, 1]
+    assert stat_corr > 0.99, f"Kruskal stat Pearson r = {stat_corr:.4f}"
+    p_corr = np.corrcoef(py_a["p.value"].to_numpy(),
+                         r_a["p.value"].to_numpy())[0, 1]
+    assert p_corr > 0.99, f"Kruskal p.value Pearson r = {p_corr:.4f}"
+
+
+def test_olink_bridge_selector_r_parity(three_group_dataset):
+    """Selected bridge-sample set should overlap R's by > 80%."""
+    from pyolinkanalyze import olink_bridge_selector
+    bridge_path = three_group_dataset["R_out"] / "bridge.tsv"
+    if not bridge_path.exists():
+        pytest.skip("R olink_bridgeselector output not present")
+    py = olink_bridge_selector(three_group_dataset["df_ref"],
+                               sample_missing_freq=0.9, n=6)
+    r = pd.read_csv(bridge_path, sep="\t")
+    py_ids = set(py["SampleID"].astype(str))
+    r_ids = set(r["SampleID"].astype(str))
+    overlap = len(py_ids & r_ids) / max(len(r_ids), 1)
+    assert overlap > 0.8, (
+        f"bridge selection overlap with R = {overlap:.2f} "
+        f"(py={sorted(py_ids)}, r={sorted(r_ids)})"
+    )
+
+
+def test_olink_lod_below_lod_agreement():
+    """olink_lod below-LOD flags should agree > 95% with a direct
+    NPX <= LOD comparison on a frame that already carries an LOD."""
+    from pyolinkanalyze import olink_lod
+    df = generate_synthetic_npx(n_proteins=40, n_samples_per_group=10, seed=3)
+    # Use the synthetic per-assay LOD as a FixedLOD reference table.
+    lod_tbl = df[["OlinkID", "LOD"]].drop_duplicates()
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+        lod_tbl.to_csv(f.name, sep=";", index=False)
+        out = olink_lod(df.drop(columns=["LOD"]), lod_file=f.name,
+                        lod_method="FixedLOD")
+    expected = (df["NPX"].to_numpy()
+                <= df["LOD"].to_numpy())
+    got = out.sort_values(["OlinkID", "SampleID"])["below_LOD"].to_numpy()
+    exp = (df.sort_values(["OlinkID", "SampleID"])["NPX"].to_numpy()
+           <= df.sort_values(["OlinkID", "SampleID"])["LOD"].to_numpy())
+    agreement = np.mean(got == exp)
+    assert agreement > 0.95, f"below-LOD agreement = {agreement:.3f}"

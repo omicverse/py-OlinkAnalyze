@@ -57,4 +57,43 @@ if ("Subject" %in% colnames(npx)) {
               file.path(out_dir, "timing.tsv"),
               sep = "\t", quote = FALSE, row.names = FALSE)
 }
+
+# v0.2 references — ANOVA / Kruskal-Wallis. The caller passes a 3-group
+# 'Group' column (group0/group1/group2) so >2-level tests are valid.
+if ("Group" %in% colnames(npx)) {
+  av <- tryCatch(
+    suppressMessages(olink_anova(npx, variable = "Group", verbose = FALSE)),
+    error = function(e) { message("olink_anova failed: ", e$message); NULL }
+  )
+  if (!is.null(av)) {
+    write.table(as.data.frame(av), file.path(out_dir, "anova.tsv"),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+  kw <- tryCatch(
+    suppressMessages(olink_one_non_parametric(npx, variable = "Group",
+                                              verbose = FALSE)),
+    error = function(e) { message("olink_kruskal failed: ", e$message); NULL }
+  )
+  if (!is.null(kw)) {
+    write.table(as.data.frame(kw), file.path(out_dir, "kruskal.tsv"),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+}
+
+# Bridge selector reference — run on a separate frame if one is dumped.
+bridge_in <- file.path(out_dir, "..", "bridge_npx.tsv")
+if (file.exists(bridge_in)) {
+  bdf <- read.table(bridge_in, sep = "\t", header = TRUE,
+                    stringsAsFactors = FALSE, check.names = FALSE,
+                    na.strings = c("NA", ""))
+  bs <- tryCatch(
+    olink_bridgeselector(bdf, sampleMissingFreq = 0.9, n = 6),
+    error = function(e) { message("olink_bridgeselector failed: ",
+                                  e$message); NULL }
+  )
+  if (!is.null(bs)) {
+    write.table(as.data.frame(bs), file.path(out_dir, "bridge.tsv"),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+}
 cat("R OlinkAnalyze reference done\n")
