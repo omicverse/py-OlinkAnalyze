@@ -1,6 +1,6 @@
 # pyolinkanalyze
 
-A **pure-Python port of [R OlinkAnalyze](https://cran.r-project.org/package=OlinkAnalyze)** (Olink Proteomics AB) — **comprehensive coverage** of the package's computational API: NPX I/O, bridge / subset / N-way normalization, per-protein differential expression (t-test, Wilcoxon, LMM, ANOVA, Kruskal-Wallis / Friedman, ordinal regression, plus post-hoc contrasts), limit-of-detection handling, plate randomization, pathway enrichment, and a full set of matplotlib plots.
+A **pure-Python port of [R OlinkAnalyze](https://cran.r-project.org/package=OlinkAnalyze)** (Olink Proteomics AB) — **100 % coverage** of the OlinkAnalyze 3.8.2 public API: NPX I/O (CSV / TSV / Excel), bridge / subset / N-way normalization, per-protein differential expression (t-test, Wilcoxon, LMM, ANOVA, Kruskal-Wallis / Friedman, ordinal regression, plus post-hoc contrasts), limit-of-detection handling, plate randomization, plate-layout / distribution plots, pathway enrichment, and a full set of matplotlib plots.
 
 - **No `rpy2`**, no R install. Welch t-test via `scipy.stats.ttest_ind(equal_var=False)`, Mann-Whitney via `scipy.stats.mannwhitneyu(use_continuity=True)`, LMM via `statsmodels.regression.mixed_linear_model.MixedLM`, type-III ANOVA via `statsmodels` + sum-to-zero contrasts, ordinal regression via `statsmodels.miscmodels.ordinal_model.OrderedModel`.
 - Tidy long-format `pandas.DataFrame` interface — the same NPX schema Olink ships in their Explore / Target CSVs.
@@ -89,17 +89,28 @@ pa.olink_pca_plot(npx, color_by="Treatment")
 pa.olink_heatmap_plot(npx)
 pa.olink_boxplot(npx, "Treatment", olinkids=["OID00012"])
 pa.olink_pathway_heatmap(enr)
+
+# v0.2.1 — plate QC plots + general NPX reader
+plated = pa.olink_plate_randomizer(manifest, seed=0)
+pa.olink_display_plate_distributions(plated, fill_color="Treatment")
+pa.olink_display_plate_layout(plated, color_by="Treatment")
+npx = pa.read_npx("study_NPX_2024.xlsx")   # dispatches CSV / TSV / Excel
 ```
 
-## API coverage (v0.2)
+## API coverage (v0.2.1)
 
-Every **computational** function of R OlinkAnalyze is ported.
+**100 % of the R OlinkAnalyze 3.8.2 public API is ported.** The only
+names not mapped to Python functions are `%>%` (the R pipe) and
+`manifest` / `npx_data1` / `npx_data2` (bundled example datasets) —
+these are not functions.
 
 ### I/O & normalization
 
 | Python | R counterpart |
 |---|---|
-| `read_npx_csv` | `read_NPX` (CSV only — see skipped) |
+| `read_npx` | `read_NPX` (dispatches CSV / TSV / Excel) ✅ |
+| `read_npx_csv` | `read_NPX` (long-format CSV path) ✅ |
+| `read_npx_excel` | `read_NPX` (`.xlsx` / `.xls` Olink export) ✅ |
 | `olink_normalization` | `olink_normalization` (bridge, difference-of-medians) |
 | `olink_normalization_reference_medians` | `olink_normalization(reference_medians=…)` |
 | `olink_normalization_bridge` | `olink_normalization_bridge` (paired median-of-diffs) |
@@ -145,15 +156,19 @@ Every **computational** function of R OlinkAnalyze is ported.
 | `olink_lmer_plot` | `olink_lmer_plot` |
 | `olink_pathway_heatmap` | `olink_pathway_heatmap` |
 | `olink_pathway_visualization` | `olink_pathway_visualization` |
+| `olink_display_plate_distributions` | `olink_displayPlateDistributions` ✅ |
+| `olink_display_plate_layout` | `olink_displayPlateLayout` ✅ |
 | `olink_pal`, `set_plot_theme`, `olink_color_discrete`, `olink_fill_discrete`, `olink_color_gradient`, `olink_fill_gradient` | same names |
 
-## What's NOT ported (and why)
+## Not Python functions
 
-| R function | Reason |
+| R name | Reason |
 |---|---|
-| `olink_displayPlateDistributions`, `olink_displayPlateLayout` | niche plate-layout visualisations — out of scope |
-| `read_NPX` (binary / Excel inputs) | `read_npx_csv` covers the long-format CSV path; Olink's binary / Excel parsers are not ported |
-| `%>%`, `manifest`, `npx_data1`, `npx_data2` | R pipe + bundled example datasets — not functions |
+| `%>%` | R magrittr pipe — a language operator, not a function to port |
+| `manifest`, `npx_data1`, `npx_data2` | bundled example datasets, not functions |
+
+Every other function in R OlinkAnalyze 3.8.2 has a Python counterpart in
+the tables above.
 
 ## R-parity
 

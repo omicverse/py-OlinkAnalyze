@@ -557,6 +557,209 @@ def olink_pathway_heatmap(
     return ax
 
 
+# ----------------------------------------------------------------------
+# Plate distribution / layout — port of olink_displayPlateDistributions /
+# olink_displayPlateLayout
+# ----------------------------------------------------------------------
+
+def olink_display_plate_distributions(
+    df: pd.DataFrame,
+    fill_color: str,
+    plate_col: str = "PlateID",
+    ax=None,
+):
+    """Stacked-bar plot of a categorical variable's composition per plate.
+
+    Port of ``OlinkAnalyze::olink_displayPlateDistributions``. For each
+    plate, draws a 100 %-stacked bar showing the percentage of wells in
+    each level of ``fill_color`` — used to confirm that a randomization
+    spread a study variable evenly across plates.
+
+    Parameters
+    ----------
+    df :
+        A plate manifest (e.g. the output of
+        :func:`~pyolinkanalyze.olink_plate_randomizer`) with one row per
+        well.
+    fill_color :
+        Categorical column whose per-plate composition is shown.
+    plate_col :
+        Column holding the plate identifier. R uses ``plate``; the
+        Python randomizer also emits ``plate`` — both are accepted.
+    ax :
+        Existing matplotlib axes, or ``None`` to create a new one.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The percent table is attached as ``ax.plate_distribution``.
+    """
+    _require_mpl()
+    pc = plate_col if plate_col in df.columns else (
+        "plate" if "plate" in df.columns else plate_col)
+    if pc not in df.columns:
+        raise ValueError(f"plate column '{plate_col}' not in DataFrame.")
+    if fill_color not in df.columns:
+        raise ValueError(f"fill_color column '{fill_color}' not in DataFrame.")
+
+    counts = (df.groupby([pc, fill_color]).size()
+              .rename("n").reset_index())
+    counts["percent"] = counts.groupby(pc)["n"].transform(
+        lambda s: 100.0 * s / s.sum())
+    pivot = counts.pivot_table(index=pc, columns=fill_color,
+                               values="percent", fill_value=0.0)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(1.2 * len(pivot) + 2, 4))
+
+    levels = list(pivot.columns)
+    colors = olink_pal(len(levels))
+    plates = list(pivot.index)
+    x = np.arange(len(plates))
+    bottom = np.zeros(len(plates))
+    for li, lv in enumerate(levels):
+        vals = pivot[lv].to_numpy()
+        ax.bar(x, vals, bottom=bottom, color=colors[li],
+               edgecolor="gray", label=str(lv))
+        bottom += vals
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(p) for p in plates], rotation=90,
+                       ha="center", va="top")
+    ax.set_xlabel("Plate")
+    ax.set_ylabel("Percent")
+    ax.legend(title=fill_color, loc="upper center",
+              bbox_to_anchor=(0.5, -0.15), ncol=min(len(levels), 5),
+              frameon=False, fontsize=8)
+    set_plot_theme(ax)
+    ax.plate_distribution = pivot
+    return ax
+
+
+def olink_display_plate_layout(
+    manifest: pd.DataFrame,
+    plate_col: str = "PlateID",
+    well_col: str = "Well",
+    color_by: Optional[str] = None,
+    plate_size: int = 96,
+    include_label: bool = False,
+    ax=None,
+):
+    """Physical well-grid plot of a plate layout, coloured by a variable.
+
+    Port of ``OlinkAnalyze::olink_displayPlateLayout``. Renders the
+    plate as a grid (rows A-H on the y-axis, columns 1-12 for a 96-well
+    plate; rows A-F for 48-well) with each well tinted by ``color_by``.
+    Empty wells are drawn white. Multiple plates are stacked vertically.
+
+    Parameters
+    ----------
+    manifest :
+        A plate manifest with one row per occupied well.
+    plate_col :
+        Plate-identifier column. ``plate`` is accepted as a fallback.
+    well_col :
+        Column holding the well string (e.g. ``A1``, ``H12``). If
+        absent, ``row`` + ``column`` columns are used instead.
+    color_by :
+        Column used to colour the wells. ``None`` colours by plate.
+    plate_size :
+        48 or 96 — controls the grid dimensions.
+    include_label :
+        If ``True``, write the ``color_by`` value inside each well.
+    ax :
+        Existing axes (or list of axes for multi-plate); ``None``
+        creates a new figure with one panel per plate.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        Single axes for one plate, otherwise the list of axes.
+    """
+    _require_mpl()
+    from matplotlib.patches import Rectangle
+
+    if plate_size not in (48, 96):
+        raise ValueError("plate_size must be 48 or 96.")
+    n_cols = plate_size // 8
+    rows = list("ABCDEFGH")
+
+    pc = plate_col if plate_col in manifest.columns else (
+        "plate" if "plate" in manifest.columns else plate_col)
+    if pc not in manifest.columns:
+        raise ValueError(f"plate column '{plate_col}' not in manifest.")
+
+    man = manifest.copy()
+    # Resolve per-well (row, column) coordinates.
+    if "row" in man.columns and "column" in man.columns:
+        man["_row"] = man["row"].astype(str).str.strip().str.upper()
+        man["_col"] = pd.to_numeric(man["column"], errors="coerce")
+    elif well_col in man.columns:
+        well = man[well_col].astype(str).str.strip().str.upper()
+        man["_row"] = well.str[0]
+        man["_col"] = pd.to_numeric(well.str[1:], errors="coerce")
+    else:
+        raise ValueError(
+            f"manifest must have a '{well_col}' column or both "
+            "'row' and 'column' columns.")
+
+    if color_by is None:
+        color_by = pc
+    if color_by not in man.columns:
+        raise ValueError(f"color_by column '{color_by}' not in manifest.")
+    man["_fill"] = man[color_by].astype(str)
+    if "SampleID" in man.columns:
+        man.loc[man["SampleID"] == "CONTROL_SAMPLE", "_fill"] = "CONTROL"
+
+    levels = sorted(man["_fill"].dropna().unique())
+    pal = olink_pal(len(levels))
+    fill_map = dict(zip(levels, pal))
+
+    plates = list(pd.unique(man[pc]))
+    if ax is None:
+        _, axes = plt.subplots(len(plates), 1,
+                               figsize=(0.7 * n_cols + 1.5,
+                                        1.0 * len(plates) + 1),
+                               squeeze=False)
+        axes = list(axes[:, 0])
+    else:
+        axes = [ax] if not hasattr(ax, "__len__") else list(ax)
+
+    for axi, plate in zip(axes, plates):
+        sub = man.loc[man[pc] == plate]
+        coord = {}
+        for _, r in sub.iterrows():
+            coord[(r["_row"], r["_col"])] = r["_fill"]
+        for ri, rname in enumerate(rows):
+            for ci in range(1, n_cols + 1):
+                fill = coord.get((rname, ci))
+                color = fill_map.get(fill, "white") if fill else "white"
+                # y inverted so row A sits at the top.
+                y = len(rows) - 1 - ri
+                axi.add_patch(Rectangle((ci - 1, y), 1, 1,
+                                        facecolor=color,
+                                        edgecolor="black", lw=0.6))
+                if include_label and fill:
+                    axi.text(ci - 0.5, y + 0.5, str(fill),
+                             ha="center", va="center", fontsize=5)
+        axi.set_xlim(0, n_cols)
+        axi.set_ylim(0, len(rows))
+        axi.set_xticks([c + 0.5 for c in range(n_cols)])
+        axi.set_xticklabels([f"Col{c}" for c in range(1, n_cols + 1)],
+                            fontsize=7)
+        axi.set_yticks([len(rows) - 0.5 - i for i in range(len(rows))])
+        axi.set_yticklabels(rows, fontsize=7)
+        axi.set_aspect("equal")
+        axi.set_title(str(plate), fontsize=9)
+        axi.tick_params(length=0)
+
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=fill_map[lv],
+                             ec="black", lw=0.5) for lv in levels]
+    axes[-1].legend(handles, [str(x) for x in levels], title=color_by,
+                    loc="upper center", bbox_to_anchor=(0.5, -0.2),
+                    ncol=min(len(levels), 5), frameon=False, fontsize=7)
+    return axes[0] if len(axes) == 1 else axes
+
+
 def olink_pathway_visualization(
     enrichment: pd.DataFrame,
     n_terms: int = 15,

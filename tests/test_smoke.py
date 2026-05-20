@@ -483,3 +483,80 @@ def test_olink_pathway_plots_return_axes():
     en = olink_pathway_enrichment(res, gene_sets, method="gsea", n_perm=100)
     assert olink_pathway_heatmap(en) is not None
     assert olink_pathway_visualization(en) is not None
+
+
+# ----------------------------------------------------------------------
+# v0.2.1 — plate plots + read_npx dispatch
+# ----------------------------------------------------------------------
+
+def _plated_manifest():
+    """A randomized plate manifest with a study variable to colour by."""
+    from pyolinkanalyze import olink_plate_randomizer
+    man = pd.DataFrame({
+        "SampleID": [f"S{i:03d}" for i in range(150)],
+        "Treatment": [f"group{i % 3}" for i in range(150)],
+    })
+    return olink_plate_randomizer(man, seed=0)
+
+
+def test_olink_display_plate_distributions_returns_axes():
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    from pyolinkanalyze import olink_display_plate_distributions
+    plated = _plated_manifest()
+    ax = olink_display_plate_distributions(plated, fill_color="Treatment")
+    assert hasattr(ax, "bar")
+    # Each plate's stacked percentages should sum to ~100.
+    pivot = ax.plate_distribution
+    np.testing.assert_allclose(pivot.sum(axis=1).to_numpy(), 100.0,
+                               atol=1e-9)
+
+
+def test_olink_display_plate_layout_returns_axes():
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    from pyolinkanalyze import olink_display_plate_layout
+    plated = _plated_manifest()
+    out = olink_display_plate_layout(plated, color_by="Treatment")
+    axes = out if isinstance(out, list) else [out]
+    for ax in axes:
+        assert hasattr(ax, "add_patch")
+    # Single-plate manifest returns a bare Axes.
+    one_plate = plated.loc[plated["plate"] == plated["plate"].iloc[0]]
+    ax1 = olink_display_plate_layout(one_plate, color_by="Treatment",
+                                     include_label=True)
+    assert hasattr(ax1, "add_patch")
+
+
+def test_read_npx_dispatches_csv(tmp_path):
+    from pyolinkanalyze import read_npx
+    df = generate_synthetic_npx(n_proteins=4, n_samples_per_group=3, seed=30)
+    p = tmp_path / "npx.csv"
+    df.to_csv(p, index=False)
+    out = read_npx(p)
+    assert out.shape == df.shape
+    np.testing.assert_allclose(out["NPX"].to_numpy(), df["NPX"].to_numpy())
+
+
+def test_read_npx_rejects_unknown_extension(tmp_path):
+    from pyolinkanalyze import read_npx
+    p = tmp_path / "npx.dat"
+    p.write_text("nothing")
+    with pytest.raises(ValueError):
+        read_npx(p)
+
+
+def test_read_npx_dispatches_excel(tmp_path):
+    pytest.importorskip("openpyxl")
+    from pyolinkanalyze import read_npx
+    df = generate_synthetic_npx(n_proteins=4, n_samples_per_group=3, seed=31)
+    p = tmp_path / "npx.xlsx"
+    df.to_excel(p, index=False)
+    out = read_npx(p)
+    assert {"SampleID", "OlinkID", "NPX"}.issubset(out.columns)
+    assert out.shape[0] == df.shape[0]
+    np.testing.assert_allclose(
+        out.sort_values(["SampleID", "OlinkID"])["NPX"].to_numpy(),
+        df.sort_values(["SampleID", "OlinkID"])["NPX"].to_numpy())

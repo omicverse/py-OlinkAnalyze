@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyolinkanalyze"
-version = "0.2.0"
+version = "0.2.1"
 description = "Pure-Python port of Olink Proteomics' R OlinkAnalyze — NPX I/O, bridge normalization, and per-protein differential expression for Olink proteomics."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,9 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-cov", "ruff"]
+dev = ["pytest>=7", "pytest-cov", "ruff", "openpyxl>=3.0"]
 plotting = ["matplotlib>=3.6", "scikit-learn>=1.1"]
 umap = ["umap-learn>=0.5"]
+excel = ["openpyxl>=3.0"]
 
 [project.urls]
 Homepage = "https://github.com/omicverse/py-OlinkAnalyze"

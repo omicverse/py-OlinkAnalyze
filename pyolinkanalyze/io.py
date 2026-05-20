@@ -100,6 +100,100 @@ def _normalize_npx_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def read_npx_excel(
+    path: Union[str, Path],
+    sheet: Union[str, int, None] = 0,
+) -> pd.DataFrame:
+    """Read an Olink long-format NPX Excel (``.xlsx`` / ``.xls``) export.
+
+    Port of the Excel branch of R ``read_NPX`` (``read_NPX_target``).
+    Olink's Target Excel exports ship a *long-format* NPX table — one
+    sheet whose first row is the column header followed by the NPX rows.
+    Rows with a missing ``SampleID`` (trailing metadata such as
+    *Missing Data freq.* / *LOD* summary lines) are dropped, mirroring
+    R's ``dplyr::filter(!is.na(SampleID))``.
+
+    Parameters
+    ----------
+    path :
+        Path to the ``.xlsx`` / ``.xls`` NPX file.
+    sheet :
+        Worksheet name or zero-based index. Default is the first sheet.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Tidy long-form NPX table (same schema as :func:`read_npx_csv`).
+
+    Raises
+    ------
+    ImportError
+        If the ``openpyxl`` (``.xlsx``) / ``xlrd`` (``.xls``) engine
+        needed by :func:`pandas.read_excel` is not installed.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    ext = path.suffix.lower()
+    engine = "openpyxl" if ext == ".xlsx" else None
+    try:
+        df = pd.read_excel(path, sheet_name=sheet, engine=engine)
+    except ImportError as e:  # pragma: no cover - depends on env
+        pkg = "openpyxl" if ext == ".xlsx" else "xlrd"
+        raise ImportError(
+            f"Reading '{ext}' NPX files requires the '{pkg}' package. "
+            f"Install with `pip install pyolinkanalyze[excel]`."
+        ) from e
+
+    # Olink Excel exports occasionally carry trailing metadata rows
+    # (Missing Data freq., LOD, Normalization) with a blank SampleID.
+    if "SampleID" in df.columns:
+        df = df.loc[df["SampleID"].notna()].copy()
+    return _normalize_npx_frame(df)
+
+
+def read_npx(
+    path: Union[str, Path],
+    **kwargs,
+) -> pd.DataFrame:
+    """Read an Olink NPX export, dispatching on the file extension.
+
+    General entry point — the Python counterpart of R ``read_NPX``:
+
+    * ``.csv`` / ``.txt`` / ``.tsv`` -> :func:`read_npx_csv`.
+    * ``.xlsx`` / ``.xls``           -> :func:`read_npx_excel`.
+
+    Parameters
+    ----------
+    path :
+        Path to the NPX file.
+    **kwargs :
+        Forwarded to the underlying reader (``sep`` / ``encoding`` for
+        CSV, ``sheet`` for Excel).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Tidy long-form NPX table.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not a recognised NPX format.
+    """
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext in (".csv", ".txt", ".tsv"):
+        return read_npx_csv(path, **kwargs)
+    if ext in (".xlsx", ".xls"):
+        return read_npx_excel(path, **kwargs)
+    raise ValueError(
+        f"Unrecognized NPX file extension '{ext}'. Expected one of "
+        ".csv, .txt, .tsv, .xlsx, .xls."
+    )
+
+
 def write_npx_csv(df: pd.DataFrame, path: Union[str, Path],
                   sep: str = ",") -> None:
     """Convenience writer — round-trip with :func:`read_npx_csv`."""
